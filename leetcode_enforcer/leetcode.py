@@ -32,6 +32,7 @@ query questionData($titleSlug: String!) {
     topicTags { name }
     content
     codeSnippets { langSlug code }
+    sampleTestCase
   }
 }
 """
@@ -52,6 +53,7 @@ class Problem:
     topics: list[str]        # topic tags, for same-pattern selection (#12)
     content_html: str        # problem statement (HTML)
     snippets: dict[str, str]  # langSlug -> starter code (#16)
+    sample_testcase: str = ""  # default test input for the Run button (#34)
 
     @property
     def url(self) -> str:
@@ -91,6 +93,7 @@ def _parse_problem(q: dict) -> Problem:
         topics=[t["name"] for t in (q.get("topicTags") or [])],
         content_html=q.get("content") or "",
         snippets={s["langSlug"]: s["code"] for s in (q.get("codeSnippets") or [])},
+        sample_testcase=q.get("sampleTestCase") or "",
     )
 
 
@@ -154,6 +157,62 @@ def check_submission(submission_id: int, creds: dict,
     )
     resp.raise_for_status()
     return resp.json()
+
+
+@dataclass
+class RunResult:
+    ok: bool                         # ran without compile/runtime error AND correct
+    status: str                      # status_msg from LeetCode
+    output: list | None = None       # the code's answers for the input(s)
+    expected: list | None = None     # expected answers (when available)
+    runtime: str | None = None
+    error: str | None = None         # compile/runtime error text, if any
+    raw: dict = field(default_factory=dict)
+
+
+def run_code(problem: Problem, lang: str, code: str, data_input: str, creds: dict,
+             timeout: int = DEFAULT_TIMEOUT) -> int:
+    """Run (not submit) against ``data_input``; return the interpret id to poll."""
+    cookies, headers = _auth(creds)
+    headers["Referer"] = problem.url
+    resp = requests.post(
+        f"{BASE}/problems/{problem.slug}/interpret_solution/",
+        json={"lang": lang, "question_id": problem.internal_id,
+              "typed_code": code, "data_input": data_input},
+        cookies=cookies, headers=headers, timeout=timeout,
+    )
+    if resp.status_code in (401, 403):
+        raise LeetCodeError("Not authenticated — LeetCode session expired? Re-paste the cookie.")
+    resp.raise_for_status()
+    interpret_id = resp.json().get("interpret_id")
+    if not interpret_id:
+        raise LeetCodeError(f"Run returned no interpret_id: {resp.json()!r}")
+    return interpret_id
+
+
+def run_and_wait(problem: Problem, lang: str, code: str, data_input: str, creds: dict,
+                 poll_interval: float = POLL_INTERVAL, max_wait: float = MAX_WAIT,
+                 timeout: int = DEFAULT_TIMEOUT, sleep=time.sleep,
+                 now=time.monotonic) -> RunResult:
+    """Run against custom/sample input and wait for the result (the 'Run' button, #34)."""
+    interpret_id = run_code(problem, lang, code, data_input, creds, timeout)
+    deadline = now() + max_wait
+    while now() < deadline:
+        data = check_submission(interpret_id, creds, timeout)
+        if data.get("state") == "SUCCESS":
+            error = (data.get("compile_error") or data.get("runtime_error") or None)
+            correct = bool(data.get("correct_answer")) and not error
+            return RunResult(
+                ok=correct,
+                status=data.get("status_msg", "Unknown"),
+                output=data.get("code_answer"),
+                expected=data.get("expected_code_answer"),
+                runtime=data.get("status_runtime"),
+                error=error,
+                raw=data,
+            )
+        sleep(poll_interval)
+    raise LeetCodeError("Timed out waiting for the run result.")
 
 
 def submit_and_wait(problem: Problem, lang: str, code: str, creds: dict,
