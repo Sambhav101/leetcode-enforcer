@@ -25,6 +25,7 @@ def _question_payload():
     return {
         "data": {
             "question": {
+                "questionId": "1",
                 "questionFrontendId": "1",
                 "title": "Two Sum",
                 "titleSlug": "two-sum",

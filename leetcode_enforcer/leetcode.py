@@ -8,7 +8,8 @@ number (#13), topic tags (#12), the ``isPaidOnly`` flag (#14), and per-language
 starter snippets (#16).
 """
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 import requests
 
@@ -22,6 +23,7 @@ SUPPORTED_LANGS = ("python3", "cpp", "rust")
 _QUESTION_QUERY = """
 query questionData($titleSlug: String!) {
   question(titleSlug: $titleSlug) {
+    questionId
     questionFrontendId
     title
     titleSlug
@@ -41,7 +43,8 @@ class LeetCodeError(RuntimeError):
 
 @dataclass
 class Problem:
-    number: int
+    internal_id: str         # LeetCode's internal questionId — needed to submit (#4)
+    number: int              # questionFrontendId — the human-facing problem number (#13)
     title: str
     slug: str
     difficulty: str          # "Easy" | "Medium" | "Hard"
@@ -79,6 +82,7 @@ def _graphql(query: str, variables: dict, timeout: int = DEFAULT_TIMEOUT) -> dic
 
 def _parse_problem(q: dict) -> Problem:
     return Problem(
+        internal_id=str(q["questionId"]),
         number=int(q["questionFrontendId"]),
         title=q["title"],
         slug=q["titleSlug"],
@@ -97,3 +101,81 @@ def fetch_problem(slug: str, timeout: int = DEFAULT_TIMEOUT) -> Problem:
     if not question:
         raise LeetCodeError(f"No problem found for slug {slug!r}")
     return _parse_problem(question)
+
+
+# ── submission (authenticated — needs Keychain creds, see issue #2) ──────────
+
+POLL_INTERVAL = 1.0   # seconds between verdict polls
+MAX_WAIT = 90.0       # give up waiting for a verdict after this long
+
+
+@dataclass
+class Verdict:
+    accepted: bool
+    status: str                      # "Accepted", "Wrong Answer", "Runtime Error", ...
+    total_correct: int | None = None
+    total_testcases: int | None = None
+    raw: dict = field(default_factory=dict)
+
+
+def _auth(creds: dict) -> tuple[dict, dict]:
+    """Build the (cookies, headers) needed for authenticated requests."""
+    cookies = {"LEETCODE_SESSION": creds["session"], "csrftoken": creds["csrf"]}
+    headers = {"X-CSRFToken": creds["csrf"], "User-Agent": "leetcode-enforcer"}
+    return cookies, headers
+
+
+def submit(problem: Problem, lang: str, code: str, creds: dict,
+           timeout: int = DEFAULT_TIMEOUT) -> int:
+    """Submit a solution; return the submission_id. Raises on auth/API failure."""
+    cookies, headers = _auth(creds)
+    headers["Referer"] = problem.url
+    resp = requests.post(
+        f"{BASE}/problems/{problem.slug}/submit/",
+        json={"lang": lang, "question_id": problem.internal_id, "typed_code": code},
+        cookies=cookies, headers=headers, timeout=timeout,
+    )
+    if resp.status_code in (401, 403):
+        raise LeetCodeError("Not authenticated — LeetCode session expired? Re-paste the cookie.")
+    resp.raise_for_status()
+    submission_id = resp.json().get("submission_id")
+    if not submission_id:
+        raise LeetCodeError(f"Submit returned no submission_id: {resp.json()!r}")
+    return int(submission_id)
+
+
+def check_submission(submission_id: int, creds: dict,
+                     timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """Poll a submission's status once; returns the raw check payload."""
+    cookies, headers = _auth(creds)
+    resp = requests.get(
+        f"{BASE}/submissions/detail/{submission_id}/check/",
+        cookies=cookies, headers=headers, timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def submit_and_wait(problem: Problem, lang: str, code: str, creds: dict,
+                    poll_interval: float = POLL_INTERVAL, max_wait: float = MAX_WAIT,
+                    timeout: int = DEFAULT_TIMEOUT, sleep=time.sleep,
+                    now=time.monotonic) -> Verdict:
+    """Submit and poll until LeetCode finishes judging; return the Verdict.
+
+    The blocker releases only when ``verdict.accepted`` is True (DESIGN.md §4a).
+    """
+    submission_id = submit(problem, lang, code, creds, timeout)
+    deadline = now() + max_wait
+    while now() < deadline:
+        data = check_submission(submission_id, creds, timeout)
+        if data.get("state") == "SUCCESS":
+            status = data.get("status_msg", "Unknown")
+            return Verdict(
+                accepted=(status == "Accepted"),
+                status=status,
+                total_correct=data.get("total_correct"),
+                total_testcases=data.get("total_testcases"),
+                raw=data,
+            )
+        sleep(poll_interval)
+    raise LeetCodeError("Timed out waiting for LeetCode to judge the submission.")
