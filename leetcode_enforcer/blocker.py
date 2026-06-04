@@ -10,11 +10,30 @@ submit → verdict → release loop.
 helpers) can be imported/tested without a GUI backend.
 """
 
+import os
+
 from . import leetcode
 from .leetcode import Problem, SUPPORTED_LANGS
 
 # Friendly labels for the languages we support (issue #16).
 LANG_LABELS = {"python3": "Python", "cpp": "C++", "rust": "Rust"}
+
+# CodeMirror is vendored locally and inlined into the page (issue #36) so the
+# blocker renders instantly and offline — no CDN, no blocking-render white screen.
+_VENDOR = os.path.join(os.path.dirname(__file__), "vendor", "codemirror")
+
+
+def _read_vendor(name: str) -> str:
+    try:
+        with open(os.path.join(_VENDOR, name), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""   # falls back to the plain-textarea editor in JS
+
+
+_CM_CSS = _read_vendor("cm.css") + "\n" + _read_vendor("material-darker.css")
+_CM_JS = "\n".join(_read_vendor(n) for n in (
+    "cm.js", "clike.js", "python.js", "rust.js", "matchbrackets.js", "closebrackets.js"))
 
 
 def build_state(problem: Problem, languages=SUPPORTED_LANGS) -> dict:
@@ -127,16 +146,10 @@ class BlockerApi:
         os._exit(0)
 
 
-_HTML = r"""<!DOCTYPE html>
+_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/rust/rust.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<style>/*__CM_CSS__*/</style>
+<script>/*__CM_JS__*/</script>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing:border-box; margin:0; -webkit-font-smoothing:antialiased; }
@@ -224,9 +237,13 @@ _HTML = r"""<!DOCTYPE html>
   </div>
   <div class="footer"><button class="escape" onclick="escapeHatch()">emergency exit</button></div>
 <script>
-  let S=null, editor=null;
+  let S=null, cm=null;
   const CM_MODE={python3:'python', cpp:'text/x-c++src', rust:'rust'};
   const $=id=>document.getElementById(id);
+  // editor abstraction: CodeMirror if available, else the plain <textarea> fallback
+  function getCode(){ return cm ? cm.getValue() : $('code').value; }
+  function setCode(v){ if(cm){ cm.setValue(v); } else { $('code').value=v; } }
+  function setMode(slug){ if(cm){ cm.setOption('mode', CM_MODE[slug]||'text/plain'); } }
   async function load(){
     S=await window.pywebview.api.state();
     $('pnum').textContent='#'+S.number;
@@ -235,24 +252,26 @@ _HTML = r"""<!DOCTYPE html>
     $('content').innerHTML=S.content_html||'<p>(no description)</p>';
     $('topics').innerHTML=S.topics.map(t=>'<span class="tag">'+t+'</span>').join('');
     const sel=$('lang'); sel.innerHTML=S.languages.map(l=>'<option value="'+l.slug+'">'+l.label+'</option>').join('');
-    editor=CodeMirror.fromTextArea($('code'), {
-      lineNumbers:true, theme:'material-darker', matchBrackets:true, autoCloseBrackets:true,
-      indentUnit:4, tabSize:4, indentWithTabs:false,
-      extraKeys:{ Tab:cm=>cm.replaceSelection('    ','end'), 'Shift-Tab':cm=>cm.execCommand('indentLess') },
-    });
+    if(window.CodeMirror){
+      cm=CodeMirror.fromTextArea($('code'), {
+        lineNumbers:true, theme:'material-darker', matchBrackets:true, autoCloseBrackets:true,
+        indentUnit:4, tabSize:4, indentWithTabs:false,
+        extraKeys:{ Tab:c=>c.replaceSelection('    ','end'), 'Shift-Tab':c=>c.execCommand('indentLess') },
+      });
+    }
     $('testinput').value = S.sample_testcase || '';
     loadStarter();
   }
   function loadStarter(){
     const l=S.languages.find(x=>x.slug===$('lang').value);
-    editor.setOption('mode', CM_MODE[$('lang').value]||'text/plain');
-    editor.setValue((l&&l.starter)||'');
+    setMode($('lang').value);
+    setCode((l&&l.starter)||'');
   }
   function openLink(){ window.open(S.url); }
   async function submit(){
     const btn=$('submitBtn'), v=$('verdict');
     btn.disabled=true; v.className='info'; v.innerHTML='<span class="spin">⏳</span> Submitting & judging…';
-    const r=await window.pywebview.api.submit($('lang').value, editor.getValue());
+    const r=await window.pywebview.api.submit($('lang').value, getCode());
     if(!r.ok){ v.className='bad'; v.textContent='⚠ '+r.error; btn.disabled=false; return; }
     if(r.accepted){ v.className='ok'; v.textContent='✅ Accepted! Releasing…';
       setTimeout(()=>window.pywebview.api.release(), 1200); return; }
@@ -262,7 +281,7 @@ _HTML = r"""<!DOCTYPE html>
   async function runCode(){
     const rr=$('runresult'), b=$('runBtn');
     b.disabled=true; rr.className='info'; rr.innerHTML='<span class="spin">▶</span> Running…';
-    const r=await window.pywebview.api.run($('lang').value, editor.getValue(), $('testinput').value);
+    const r=await window.pywebview.api.run($('lang').value, getCode(), $('testinput').value);
     b.disabled=false;
     if(!r.ok){ rr.className='bad'; rr.textContent='⚠ '+r.error; return; }
     if(r.error){ rr.className='bad'; rr.textContent='Error: '+r.error; return; }
@@ -274,7 +293,7 @@ _HTML = r"""<!DOCTYPE html>
   }
   async function getHint(){
     const b=$('hintbox'); b.style.display='block'; b.innerHTML='<span class="spin">💡</span> Thinking on your local model…';
-    const r=await window.pywebview.api.hint(editor?editor.getValue():'');
+    const r=await window.pywebview.api.hint(getCode());
     b.textContent = r.ok ? ('Hint '+r.level+': '+r.text) : ('⚠ '+r.error);
   }
   async function escapeHatch(){
@@ -285,6 +304,10 @@ _HTML = r"""<!DOCTYPE html>
   }
   window.addEventListener('pywebviewready', load);
 </script></body></html>"""
+
+# Inline the vendored CodeMirror CSS/JS into the page (issue #36). Using .replace
+# (not an f-string) since the assets contain braces.
+_HTML = _TEMPLATE.replace("/*__CM_CSS__*/", _CM_CSS).replace("/*__CM_JS__*/", _CM_JS)
 
 
 def run_blocker(problem: Problem, languages=SUPPORTED_LANGS, fullscreen=True):
