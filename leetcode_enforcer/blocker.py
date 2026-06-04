@@ -57,6 +57,9 @@ class BlockerApi:
             verdict = leetcode.submit_and_wait(self._problem, lang, code, creds)
         except leetcode.LeetCodeError as e:
             return {"ok": False, "error": str(e)}
+        if verdict.accepted:
+            from . import state
+            state.record_solved(self._problem, lang)   # persist for quota/history (#9)
         return {
             "ok": True,
             "accepted": verdict.accepted,
