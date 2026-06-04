@@ -42,6 +42,7 @@ class BlockerApi:
         self._problem = problem
         self._languages = languages
         self._released = False
+        self._hint_level = 0
 
     def state(self) -> dict:
         return build_state(self._problem, self._languages)
@@ -64,9 +65,16 @@ class BlockerApi:
             "total_testcases": verdict.total_testcases,
         }
 
-    def hint(self) -> dict:
-        # Wired to the Socratic local-LLM helper in issue #7.
-        return {"text": "Hints arrive in issue #7 (local Ollama helper)."}
+    def hint(self, code: str = "", question: str = "") -> dict:
+        """Return a progressive Socratic hint from the local LLM (issue #7)."""
+        from . import helper
+        self._hint_level += 1
+        try:
+            text = helper.get_hint(self._problem, code, question, level=self._hint_level)
+        except helper.LLMError as e:
+            self._hint_level -= 1
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "text": text, "level": self._hint_level}
 
     def escape(self, confirmation: str) -> dict:
         """Give up (last resort): requires the phrase; logs it and sets a 1h re-trigger.
@@ -215,7 +223,11 @@ _HTML = r"""<!DOCTYPE html>
     v.className='bad'; v.textContent='❌ '+r.status+(r.total_correct!=null?(' ('+r.total_correct+'/'+r.total_testcases+')'):'');
     btn.disabled=false;
   }
-  async function getHint(){ const r=await window.pywebview.api.hint(); const b=$('hintbox'); b.style.display='block'; b.textContent=r.text; }
+  async function getHint(){
+    const b=$('hintbox'); b.style.display='block'; b.innerHTML='<span class="spin">💡</span> Thinking on your local model…';
+    const r=await window.pywebview.api.hint(editor?editor.getValue():'');
+    b.textContent = r.ok ? ('Hint '+r.level+': '+r.text) : ('⚠ '+r.error);
+  }
   async function escapeHatch(){
     const typed=prompt('Emergency exit — this WILL be logged.\nType exactly:  I GIVE UP');
     if(typed===null) return;
