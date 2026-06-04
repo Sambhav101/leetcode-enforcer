@@ -50,8 +50,15 @@ The core of the doc. Work this out down to the details.
 - **How pieces communicate** — APIs, function calls, events, IPC.
 
 ### 4a. LeetCode integration (the riskiest piece — designed first)
-- **Fetch problem:** `POST https://leetcode.com/graphql` (GraphQL query, e.g. `questionOfToday`
-  or pick from problemset). No auth required — public data.
+- **Fetch problem:** `POST https://leetcode.com/graphql` (GraphQL query). Returns title, slug,
+  number (`questionFrontendId`), difficulty, topic tags, premium flag, and language starter
+  snippets — enough for selection, the web link (#13), pattern-matching (#12), and language
+  starters (#16).
+- **Problem selection (resolved — see #14, #15):** draw only from **curated banks** (Blind 75,
+  NeetCode 150, Grind 75, …), not the whole problemset. These lists aren't a LeetCode API feature,
+  so the app ships a **bundled mapping** of each list → problem slugs (a small static data file,
+  updatable). **Free-tier only:** filter out any problem whose `isPaidOnly` is true. The
+  "same-pattern next question" (#12) picks within the same topic tag from the active bank.
 - **Submit:** `POST https://leetcode.com/problems/{slug}/submit/` with code + lang + question_id;
   requires `LEETCODE_SESSION` cookie + `X-CSRFToken` header. Returns `submission_id`.
 - **Verdict:** poll `.../submissions/detail/{id}/check/` until status resolves; release the
@@ -140,6 +147,8 @@ escape hatch logs the bypass and exits.
 ## 9. Open Questions
 - Escape-hatch design: how effortful should it be (timed delay? type a phrase? log it?) so it's
   safe but not a trivial bypass?
-- Problem selection: daily challenge only, or filter by topic/difficulty/your weak areas?
+- ~~Problem selection~~ — RESOLVED (#14/#15): curated banks (Blind 75/NeetCode 150/…), free-tier
+  only, via a bundled list→slug mapping. Still open: which bank(s) to ship first, and how/when to
+  refresh the bundled mapping.
 - Quota: fixed at 2/day, or configurable? What resets it (midnight local)?
 - How aggressive should "escalating nags" get, and via what (notification, refocus, full block)?
