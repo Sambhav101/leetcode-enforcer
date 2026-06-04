@@ -37,6 +37,7 @@ def _question_payload():
                     {"langSlug": "python3", "code": "class Solution:\n    pass"},
                     {"langSlug": "rust", "code": "impl Solution {}"},
                 ],
+                "sampleTestCase": "[2,7,11,15]\n9",
             }
         }
     }

@@ -32,6 +32,7 @@ def build_state(problem: Problem, languages=SUPPORTED_LANGS) -> dict:
         "topics": problem.topics,
         "content_html": problem.content_html,
         "languages": langs,
+        "sample_testcase": problem.sample_testcase,
     }
 
 
@@ -67,6 +68,19 @@ class BlockerApi:
             "total_correct": verdict.total_correct,
             "total_testcases": verdict.total_testcases,
         }
+
+    def run(self, lang: str, code: str, data_input: str) -> dict:
+        """Run (not submit) against the given test input (#34)."""
+        from . import credentials
+        creds = credentials.load_credentials()
+        if not creds:
+            return {"ok": False, "error": "No LeetCode credentials. Run the setup to paste your cookie."}
+        try:
+            r = leetcode.run_and_wait(self._problem, lang, code, data_input, creds)
+        except leetcode.LeetCodeError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "correct": r.ok, "status": r.status,
+                "output": r.output, "expected": r.expected, "error": r.error}
 
     def hint(self, code: str = "", question: str = "") -> dict:
         """Return a progressive Socratic hint from the local LLM (issue #7)."""
@@ -167,6 +181,13 @@ _HTML = r"""<!DOCTYPE html>
   .submit:disabled { opacity:.5; cursor:default; }
   #verdict { font-size:13px; font-weight:600; min-height:20px; }
   #verdict.ok { color:#5fdca0; } #verdict.bad { color:#ff8d8d; } #verdict.info { color:rgba(255,255,255,0.6); }
+  .tlabel { font-size:10px; text-transform:uppercase; letter-spacing:1px; color:rgba(255,255,255,0.4); margin-top:2px; }
+  .tin { flex:none; height:54px; font-family:"SF Mono",Menlo,monospace; font-size:12px;
+    background:#15171f; color:#eef0f6; border:0.5px solid rgba(255,255,255,0.14);
+    border-radius:8px; padding:8px; resize:none; }
+  .tin:focus { outline:none; border-color:#8ea2ff; }
+  #runresult { font-size:12px; font-variant-numeric:tabular-nums; min-height:16px; }
+  #runresult.ok { color:#5fdca0; } #runresult.bad { color:#ff8d8d; } #runresult.info { color:rgba(255,255,255,0.6); }
   #hintbox { font-size:12px; color:rgba(238,240,246,0.82); background:rgba(142,162,255,0.08);
     border:0.5px solid rgba(142,162,255,0.20); border-radius:9px; padding:10px; display:none; }
   .footer { padding:8px 20px; border-top:0.5px solid rgba(255,255,255,0.08); text-align:right; }
@@ -190,11 +211,15 @@ _HTML = r"""<!DOCTYPE html>
         <select id="lang" onchange="loadStarter()"></select>
         <button class="btn ghost" onclick="getHint()">💡 Hint</button>
         <span class="spacer" style="flex:1"></span>
+        <button class="btn ghost" id="runBtn" onclick="runCode()">▶ Run</button>
         <button class="btn submit" id="submitBtn" onclick="submit()">Submit</button>
       </div>
       <div id="verdict" class="info"></div>
       <div id="hintbox"></div>
       <textarea id="code" spellcheck="false"></textarea>
+      <div class="tlabel">Test input (editable)</div>
+      <textarea id="testinput" class="tin" spellcheck="false"></textarea>
+      <div id="runresult" class="info"></div>
     </div>
   </div>
   <div class="footer"><button class="escape" onclick="escapeHatch()">emergency exit</button></div>
@@ -215,6 +240,7 @@ _HTML = r"""<!DOCTYPE html>
       indentUnit:4, tabSize:4, indentWithTabs:false,
       extraKeys:{ Tab:cm=>cm.replaceSelection('    ','end'), 'Shift-Tab':cm=>cm.execCommand('indentLess') },
     });
+    $('testinput').value = S.sample_testcase || '';
     loadStarter();
   }
   function loadStarter(){
@@ -232,6 +258,19 @@ _HTML = r"""<!DOCTYPE html>
       setTimeout(()=>window.pywebview.api.release(), 1200); return; }
     v.className='bad'; v.textContent='❌ '+r.status+(r.total_correct!=null?(' ('+r.total_correct+'/'+r.total_testcases+')'):'');
     btn.disabled=false;
+  }
+  async function runCode(){
+    const rr=$('runresult'), b=$('runBtn');
+    b.disabled=true; rr.className='info'; rr.innerHTML='<span class="spin">▶</span> Running…';
+    const r=await window.pywebview.api.run($('lang').value, editor.getValue(), $('testinput').value);
+    b.disabled=false;
+    if(!r.ok){ rr.className='bad'; rr.textContent='⚠ '+r.error; return; }
+    if(r.error){ rr.className='bad'; rr.textContent='Error: '+r.error; return; }
+    rr.className = r.correct ? 'ok' : 'bad';
+    let msg = r.correct ? '✔ Passed sample' : '✗ Mismatch';
+    if(r.output) msg += ' · output: '+JSON.stringify(r.output);
+    if(r.expected) msg += ' · expected: '+JSON.stringify(r.expected);
+    rr.textContent = msg;
   }
   async function getHint(){
     const b=$('hintbox'); b.style.display='block'; b.innerHTML='<span class="spin">💡</span> Thinking on your local model…';
