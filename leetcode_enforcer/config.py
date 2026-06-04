@@ -16,6 +16,10 @@ STATE_PATH = APP_DIR / "state.json"
 DEFAULT_CONFIG = {
     # daily quota of accepted solutions before the day is "met"
     "daily_quota": 2,
+    # scheduler: only nag during waking hours; escalate as the day runs out (#8)
+    "active_start_hour": 8,
+    "active_end_hour": 23,
+    "nag_interval_minutes": 90,
     # curated banks to draw problems from (issue #15); free-tier only (issue #14)
     "banks": ["neetcode150", "blind75"],
     # submission languages the user may pick (issue #16)
