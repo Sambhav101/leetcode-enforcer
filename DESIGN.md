@@ -145,8 +145,13 @@ escape hatch logs the bypass and exits.
   enforcement, proper test suite + CI gate. Name the moment it becomes a product.
 
 ## 9. Open Questions
-- Escape-hatch design: how effortful should it be (timed delay? type a phrase? log it?) so it's
-  safe but not a trivial bypass?
+- ~~Escape-hatch design~~ — RESOLVED (#6): a **tiered "I can't solve this" flow**, options in order:
+  1. **Downshift** — solve ≥3 *previously solved* problems instead (or 3 Easy ones if no history);
+     clearing them releases the user. (UI loop needs the state store/scheduler → follow-up #22.)
+  2. **Give up** (last resort) — type "I GIVE UP"; releases now but the app **re-triggers after a
+     1-hour cooldown** (follow-up #23). Every give-up is logged to `~/.leetcode-enforcer/escapes.log`.
+  Policy logic (phrase check, fallback selection, give-up + cooldown) lands in #6; the alternate-
+  problem UI loop and the 1h re-trigger integrate in #22/#23 once #8/#9 exist.
 - ~~Problem selection~~ — RESOLVED (#14/#15): curated banks (Blind 75/NeetCode 150/…), free-tier
   only, via a bundled list→slug mapping. Still open: which bank(s) to ship first, and how/when to
   refresh the bundled mapping.

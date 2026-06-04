@@ -68,10 +68,18 @@ class BlockerApi:
         # Wired to the Socratic local-LLM helper in issue #7.
         return {"text": "Hints arrive in issue #7 (local Ollama helper)."}
 
-    def escape(self) -> dict:
-        # Hardened (effortful, logged) in issue #6.
+    def escape(self, confirmation: str) -> dict:
+        """Give up (last resort): requires the phrase; logs it and sets a 1h re-trigger.
+
+        The downshift option (solve 3 past/easy problems first) is the UI loop wired
+        in #22 once the state store/scheduler exist; this is the final give-up path.
+        """
+        from . import escape as escape_mod
+        if not escape_mod.verify_phrase(confirmation):
+            return {"ok": False, "error": f"Type exactly: {escape_mod.REQUIRED_PHRASE}"}
+        next_trigger = escape_mod.record_giveup(self._problem.number, self._problem.title)
         self._release()
-        return {"ok": True}
+        return {"ok": True, "next_trigger": next_trigger.isoformat(timespec="seconds")}
 
     def release(self) -> bool:
         self._release()
@@ -208,7 +216,12 @@ _HTML = r"""<!DOCTYPE html>
     btn.disabled=false;
   }
   async function getHint(){ const r=await window.pywebview.api.hint(); const b=$('hintbox'); b.style.display='block'; b.textContent=r.text; }
-  async function escapeHatch(){ if(confirm('Emergency exit — leave without solving?')) window.pywebview.api.escape(); }
+  async function escapeHatch(){
+    const typed=prompt('Emergency exit — this WILL be logged.\nType exactly:  I GIVE UP');
+    if(typed===null) return;
+    const r=await window.pywebview.api.escape(typed);
+    if(!r.ok) alert(r.error);
+  }
   window.addEventListener('pywebviewready', load);
 </script></body></html>"""
 
