@@ -97,13 +97,20 @@ class BlockerApi:
         return True
 
     def _release(self):
-        import webview
+        """Release the blocker.
+
+        NOTE: calling pywebview ``window.destroy()`` synchronously from inside a
+        js_api bridge call deadlocks the Cocoa main thread (window hangs / "not
+        responding") — a reentrancy hazard of the synchronous webview bridge, the
+        same issue memento hit. The proven workaround is a hard process exit: the
+        blocker is the terminal action of its process and state is already saved
+        before this runs. (The durable fix is the Phase-2 native rewrite, whose
+        async message handler avoids this entirely. For the future daemon, run the
+        blocker as a subprocess so this only exits the child — see #23.)
+        """
+        import os
         self._released = True
-        for w in list(webview.windows):
-            try:
-                w.destroy()
-            except Exception:
-                pass
+        os._exit(0)
 
 
 _HTML = r"""<!DOCTYPE html>
