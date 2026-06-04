@@ -1,10 +1,12 @@
-# Reusable CI starter — copy to <project>/.github/workflows/ci.yml
-# Runs the test suite on every push and PR. Keep light during the prototype;
-# add lint/type-check/coverage as blocking steps once the project is a product.
+# Runs the test suite. Keep light during the prototype; add lint/type-check/
+# coverage as blocking steps once the project is a product.
+# Triggers: PRs cover feature branches; push:main covers post-merge — so each
+# situation runs exactly once (no duplicate runs on branches that have a PR).
 name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
