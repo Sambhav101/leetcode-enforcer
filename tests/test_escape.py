@@ -63,6 +63,14 @@ def test_record_giveup_logs_and_returns_cooldown(app_dir):
     assert "gave up" in (app_dir / "escapes.log").read_text()
 
 
+def test_record_giveup_persists_cooldown_for_scheduler(app_dir):
+    import datetime
+    from leetcode_enforcer import runtime
+    now = datetime.datetime(2026, 6, 4, 12, 0, 0)
+    nxt = escape.record_giveup(1, "Two Sum", now=now)
+    assert runtime.get_cooldown_until() == nxt   # next launchd tick honors it (#23)
+
+
 def test_blocker_escape_wrong_phrase_does_not_release(app_dir, monkeypatch):
     api = BlockerApi(_problem())
     released = {"v": False}

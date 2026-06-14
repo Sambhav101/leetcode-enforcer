@@ -8,7 +8,9 @@ a give-up cooldown so the 1h re-trigger (#23) can plug in.
 import datetime
 from dataclasses import dataclass
 
-from . import config, state
+from . import config, runtime, state
+
+_UNSET = object()   # distinguishes "not passed" from an explicit None override
 
 NAG_MESSAGES = {
     1: "Time to practice — solve today's problem.",
@@ -55,10 +57,16 @@ def decide(now: datetime.datetime | None = None, *, quota: int, solved_today: in
 
 
 def decide_now(now: datetime.datetime | None = None,
-               cooldown_until: datetime.datetime | None = None,
+               cooldown_until=_UNSET,
                last_nag: datetime.datetime | None = None) -> Decision:
-    """Convenience: gather live config + state and decide."""
+    """Convenience: gather live config + state and decide.
+
+    The give-up cooldown (#23) is read from persisted runtime state unless an
+    explicit ``cooldown_until`` is supplied (None included, for tests).
+    """
     cfg = config.load_config()
+    if cooldown_until is _UNSET:
+        cooldown_until = runtime.get_cooldown_until()
     return decide(
         now,
         quota=cfg["daily_quota"],

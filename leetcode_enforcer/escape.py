@@ -16,7 +16,7 @@ LeetCode / the LLM are down.
 
 import datetime
 
-from . import config
+from . import config, runtime
 
 REQUIRED_PHRASE = "I GIVE UP"
 GIVEUP_COOLDOWN_SECONDS = 3600   # re-trigger 1 hour after a give-up (#23)
@@ -55,7 +55,13 @@ def log_escape(problem_number, problem_title, reason: str = "") -> str:
 
 
 def record_giveup(problem_number, problem_title, now=None) -> datetime.datetime:
-    """Log a give-up and return when the app should re-trigger (1h later, #23)."""
+    """Log a give-up, persist the cooldown, and return the re-trigger time (1h, #23).
+
+    The cooldown is written to runtime state so the next one-shot scheduler tick
+    (launchd/cron) sees it and skips the session until it expires.
+    """
     now = now or datetime.datetime.now()
     log_escape(problem_number, problem_title, reason="gave up")
-    return now + datetime.timedelta(seconds=GIVEUP_COOLDOWN_SECONDS)
+    next_trigger = now + datetime.timedelta(seconds=GIVEUP_COOLDOWN_SECONDS)
+    runtime.set_cooldown_until(next_trigger)
+    return next_trigger

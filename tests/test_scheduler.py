@@ -4,13 +4,27 @@ import datetime
 
 import pytest
 
-from leetcode_enforcer import scheduler
+from leetcode_enforcer import config, runtime, scheduler
 
 D = datetime.datetime
 
 
 def at(h, m=0):
     return D(2026, 6, 4, h, m)
+
+
+@pytest.fixture
+def app_dir(tmp_path, monkeypatch):
+    d = tmp_path / ".leetcode-enforcer"
+    monkeypatch.setattr(config, "APP_DIR", d)
+    monkeypatch.setattr(config, "CONFIG_PATH", d / "config.json")
+    return d
+
+
+def test_decide_now_honors_persisted_cooldown(app_dir):
+    runtime.set_cooldown_until(at(10, 30))
+    assert scheduler.decide_now(at(10)).action == "cooldown"   # within cooldown
+    assert scheduler.decide_now(at(11)).action == "nag"        # past it -> nags
 
 
 def test_quiet_hours_before_and_after():
