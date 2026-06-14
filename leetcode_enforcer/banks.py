@@ -72,3 +72,23 @@ def select_problem(enabled_banks, solved_slugs, *, fetch=fetch_problem,
         if not problem.paid:          # free-tier only (#14)
             return problem
     raise NoProblemAvailable("Couldn't find a free-tier problem to serve.")
+
+
+def select_easy_problems(enabled_banks, solved_slugs, n=3, *, fetch=fetch_problem,
+                         rng=random, max_tries: int = 24) -> list:
+    """Pick up to ``n`` free-tier *Easy* problems for the downshift loop (#22).
+
+    Used when the user has no solved history to re-serve. Skips premium-locked and
+    non-Easy problems; returns however many it found (caller handles a short list).
+    """
+    candidates = candidate_slugs(enabled_banks, solved_slugs)
+    order = list(candidates)
+    rng.shuffle(order)
+    out = []
+    for slug in order[:max_tries]:
+        problem = fetch(slug)
+        if not problem.paid and problem.difficulty == "Easy":
+            out.append(problem)
+            if len(out) >= n:
+                break
+    return out
