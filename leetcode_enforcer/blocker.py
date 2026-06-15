@@ -131,6 +131,24 @@ class BlockerApi:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "text": text, "level": self._hint_level}
 
+    def next_problem(self) -> dict:
+        """Continue with another problem after a solve (#11), preferring the same
+        topic/pattern as the one just solved (#12).
+
+        Swaps in a fresh free-tier problem and resets the hint counter. A selection
+        failure is surfaced (ok=False) so the UI can offer to release instead.
+        """
+        from . import config, state
+        cfg = config.load_config()
+        try:
+            problem = banks.select_problem(cfg["banks"], state.solved_slugs(),
+                                           prefer_topics=self._problem.topics)
+        except (leetcode.LeetCodeError, banks.NoProblemAvailable) as e:
+            return {"ok": False, "error": str(e)}
+        self._problem = problem
+        self._hint_level = 0
+        return {"ok": True, "problem": build_state(problem, self._languages)}
+
     def start_downshift(self) -> dict:
         """First tier of the escape flow (#22): swap the hard problem for a queue of
         easier ones. Release happens only after the whole queue is Accepted.
@@ -302,6 +320,10 @@ _TEMPLATE = r"""<!DOCTYPE html>
         <button class="btn submit" id="submitBtn" onclick="submit()">Submit</button>
       </div>
       <div id="verdict" class="info"></div>
+      <div id="postsubmit" class="row" style="display:none">
+        <button class="btn submit" onclick="releaseNow()">✓ Done — release</button>
+        <button class="btn ghost" onclick="solveAnother()">↻ Solve another · same topic</button>
+      </div>
       <div id="hintbox"></div>
       <textarea id="code" spellcheck="false"></textarea>
       <div class="tlabel">Test input (editable)</div>
@@ -347,6 +369,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     $('testinput').value = S.sample_testcase || '';
     $('verdict').textContent=''; $('verdict').className='info';
     $('runresult').textContent='';
+    $('postsubmit').style.display='none';
+    $('hintbox').style.display='none'; $('hintbox').textContent='';
     loadStarter();
   }
   async function load(){ applyState(await window.pywebview.api.state()); }
@@ -363,8 +387,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
     if(!r.ok){ v.className='bad'; v.textContent='⚠ '+r.error; btn.disabled=false; return; }
     if(r.accepted){ v.className='ok';
       if(downshiftMode){ v.textContent='✅ Accepted!'; advanceDownshift(); return; }
-      v.textContent='✅ Accepted! Releasing…';
-      setTimeout(()=>window.pywebview.api.release(), 1200); return; }
+      v.textContent='✅ Accepted! Nice work.';
+      $('postsubmit').style.display='flex'; return; }   // let the user release or keep going (#11)
     v.className='bad'; v.textContent='❌ '+r.status+(r.total_correct!=null?(' ('+r.total_correct+'/'+r.total_testcases+')'):'');
     btn.disabled=false;
   }
@@ -385,6 +409,15 @@ _TEMPLATE = r"""<!DOCTYPE html>
     const b=$('hintbox'); b.style.display='block'; b.innerHTML='<span class="spin">💡</span> Thinking on your local model…';
     const r=await window.pywebview.api.hint(getCode());
     b.textContent = r.ok ? ('Hint '+r.level+': '+r.text) : ('⚠ '+r.error);
+  }
+  function releaseNow(){ window.pywebview.api.release(); }
+  async function solveAnother(){
+    $('postsubmit').style.display='none';
+    const v=$('verdict'); v.className='info'; v.innerHTML='<span class="spin">↻</span> Loading another problem…';
+    const r=await window.pywebview.api.next_problem();
+    if(!r.ok){ v.className='bad'; v.textContent='⚠ '+r.error; $('postsubmit').style.display='flex'; return; }
+    applyState(r.problem);
+    $('submitBtn').disabled=false;
   }
   function openEscape(){ $('overlay').style.display='flex'; }
   function closeEscape(){ $('overlay').style.display='none'; }
