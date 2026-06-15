@@ -97,8 +97,14 @@ class BlockerApi:
         except leetcode.LeetCodeError as e:
             return {"ok": False, "error": str(e)}
         if verdict.accepted:
-            from . import state
+            from . import config, state
             state.record_solved(self._problem, lang)   # persist for quota/history (#9)
+            if config.load_config().get("solutions_repo_enabled"):
+                try:                                    # archive must never block release (#25)
+                    from . import solutions_repo
+                    solutions_repo.archive_solution(self._problem, lang, code)
+                except Exception:
+                    pass
         return {
             "ok": True,
             "accepted": verdict.accepted,
