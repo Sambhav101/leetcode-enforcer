@@ -12,7 +12,7 @@ helpers) can be imported/tested without a GUI backend.
 
 import os
 
-from . import leetcode
+from . import banks, leetcode
 from .leetcode import Problem, SUPPORTED_LANGS
 
 # Friendly labels for the languages we support (issue #16).
@@ -34,6 +34,19 @@ def _read_vendor(name: str) -> str:
 _CM_CSS = _read_vendor("cm.css") + "\n" + _read_vendor("material-darker.css")
 _CM_JS = "\n".join(_read_vendor(n) for n in (
     "cm.js", "clike.js", "python.js", "rust.js", "matchbrackets.js", "closebrackets.js"))
+
+
+def resolve_fallback(fallback, enabled_banks, solved_slugs, *,
+                     fetch=leetcode.fetch_problem) -> list:
+    """Turn ``escape.choose_fallback`` output into actual Problems for the loop (#22).
+
+    ``resolve`` mode re-fetches the user's recently solved slugs; ``easy`` mode draws
+    fresh free-tier Easy problems from the curated banks (no history to re-serve).
+    """
+    if fallback["mode"] == "resolve":
+        return [fetch(slug) for slug in fallback["slugs"]]
+    return banks.select_easy_problems(enabled_banks, solved_slugs, fallback["count"],
+                                      fetch=fetch)
 
 
 def build_state(problem: Problem, languages=SUPPORTED_LANGS) -> dict:
@@ -63,6 +76,9 @@ class BlockerApi:
         self._languages = languages
         self._released = False
         self._hint_level = 0
+        self._downshift = False     # downshift loop active? (#22)
+        self._queue = []            # fallback problems to clear before release
+        self._qi = 0                # index of the current problem in the queue
 
     def state(self) -> dict:
         return build_state(self._problem, self._languages)
@@ -111,6 +127,45 @@ class BlockerApi:
             self._hint_level -= 1
             return {"ok": False, "error": str(e)}
         return {"ok": True, "text": text, "level": self._hint_level}
+
+    def start_downshift(self) -> dict:
+        """First tier of the escape flow (#22): swap the hard problem for a queue of
+        easier ones. Release happens only after the whole queue is Accepted.
+
+        Re-serves the user's recently solved problems, or fresh Easy ones if there's
+        no history (``escape.choose_fallback``). On a load failure (e.g. LeetCode
+        down) returns ``ok=False`` so the UI can fall back to the give-up tier —
+        the user is never trapped.
+        """
+        from . import config, escape as escape_mod, state
+        cfg = config.load_config()
+        solved = state.solved_slugs()
+        fallback = escape_mod.choose_fallback(solved)
+        try:
+            queue = resolve_fallback(fallback, cfg["banks"], solved)
+        except (leetcode.LeetCodeError, banks.NoProblemAvailable) as e:
+            return {"ok": False, "error": str(e)}
+        if not queue:
+            return {"ok": False, "error": "Couldn't load downshift problems."}
+        self._downshift = True
+        self._queue = queue
+        self._qi = 0
+        self._problem = queue[0]
+        return {"ok": True, "problem": build_state(queue[0], self._languages),
+                "index": 1, "total": len(queue)}
+
+    def advance_downshift(self) -> dict:
+        """Move to the next problem in the downshift queue after an Accepted.
+
+        Returns ``done=True`` once every fallback problem has been cleared (the UI
+        then releases); otherwise returns the next problem and its 1-based position.
+        """
+        self._qi += 1
+        if self._qi >= len(self._queue):
+            return {"done": True}
+        self._problem = self._queue[self._qi]
+        return {"done": False, "problem": build_state(self._problem, self._languages),
+                "index": self._qi + 1, "total": len(self._queue)}
 
     def escape(self, confirmation: str) -> dict:
         """Give up (last resort): requires the phrase; logs it and sets a 1h re-trigger.
@@ -206,6 +261,21 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .footer { padding:8px 20px; border-top:0.5px solid rgba(255,255,255,0.08); text-align:right; }
   .escape { font-size:11px; color:rgba(255,255,255,0.35); background:none; border:none; cursor:pointer; }
   .escape:hover { color:rgba(255,141,141,0.8); }
+  .ds { font-size:11px; font-weight:700; padding:2px 9px; border-radius:99px;
+    background:rgba(142,162,255,0.18); color:#8ea2ff; display:none; }
+  .overlay { position:fixed; inset:0; background:rgba(8,9,13,0.72); -webkit-backdrop-filter:blur(4px);
+    backdrop-filter:blur(4px); display:none; align-items:center; justify-content:center; z-index:50; }
+  .modal { width:min(460px,90vw); background:#171922; border:0.5px solid rgba(255,255,255,0.14);
+    border-radius:16px; padding:22px; display:flex; flex-direction:column; gap:12px;
+    box-shadow:0 24px 64px rgba(0,0,0,0.5); }
+  .modal h2 { font-size:16px; font-weight:700; }
+  .modal p { font-size:12px; color:rgba(255,255,255,0.6); line-height:1.5; }
+  .tier { width:100%; text-align:left; padding:12px 14px; background:rgba(255,255,255,0.07);
+    color:#eef0f6; border:0.5px solid rgba(255,255,255,0.12); }
+  .tier:hover { filter:brightness(1.25); }
+  .tier .sub { display:block; font-size:11px; font-weight:400; color:rgba(255,255,255,0.5); margin-top:3px; }
+  .tier.danger:hover { border-color:rgba(255,141,141,0.5); }
+  .cancel { background:none; border:none; color:rgba(255,255,255,0.4); font-size:12px; cursor:pointer; align-self:center; }
   .spin { display:inline-block; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
 </style></head><body>
@@ -214,6 +284,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
     <span class="pnum" id="pnum"></span>
     <span class="ptitle" id="ptitle"></span>
     <span class="diff" id="diff"></span>
+    <span class="ds" id="dsbanner"></span>
     <span class="spacer"></span>
     <a id="weblink" href="#" onclick="openLink();return false;">Open on LeetCode ↗</a>
   </div>
@@ -235,24 +306,35 @@ _TEMPLATE = r"""<!DOCTYPE html>
       <div id="runresult" class="info"></div>
     </div>
   </div>
-  <div class="footer"><button class="escape" onclick="escapeHatch()">emergency exit</button></div>
+  <div class="footer"><button class="escape" onclick="openEscape()">I can't solve this</button></div>
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <h2>Stuck on this one?</h2>
+      <p>Quitting outright is the last resort. Try the easier path first.</p>
+      <button class="btn tier" onclick="startDownshift()">⬇️ Downshift — solve easier problems instead
+        <span class="sub">Re-serves recent problems (or Easy ones). The block clears once all are Accepted.</span></button>
+      <button class="btn tier danger" onclick="giveUp()">🏳️ I give up
+        <span class="sub">Releases now, logs it, and re-triggers after a 1-hour cooldown.</span></button>
+      <button class="cancel" onclick="closeEscape()">Keep trying</button>
+    </div>
+  </div>
 <script>
-  let S=null, cm=null;
+  let S=null, cm=null, downshiftMode=false;
   const CM_MODE={python3:'python', cpp:'text/x-c++src', rust:'rust'};
   const $=id=>document.getElementById(id);
   // editor abstraction: CodeMirror if available, else the plain <textarea> fallback
   function getCode(){ return cm ? cm.getValue() : $('code').value; }
   function setCode(v){ if(cm){ cm.setValue(v); } else { $('code').value=v; } }
   function setMode(slug){ if(cm){ cm.setOption('mode', CM_MODE[slug]||'text/plain'); } }
-  async function load(){
-    S=await window.pywebview.api.state();
+  function applyState(s){
+    S=s;
     $('pnum').textContent='#'+S.number;
     $('ptitle').textContent=S.title;
     $('diff').textContent=S.difficulty; $('diff').className='diff '+S.difficulty;
     $('content').innerHTML=S.content_html||'<p>(no description)</p>';
     $('topics').innerHTML=S.topics.map(t=>'<span class="tag">'+t+'</span>').join('');
     const sel=$('lang'); sel.innerHTML=S.languages.map(l=>'<option value="'+l.slug+'">'+l.label+'</option>').join('');
-    if(window.CodeMirror){
+    if(window.CodeMirror && !cm){
       cm=CodeMirror.fromTextArea($('code'), {
         lineNumbers:true, theme:'material-darker', matchBrackets:true, autoCloseBrackets:true,
         indentUnit:4, tabSize:4, indentWithTabs:false,
@@ -260,8 +342,11 @@ _TEMPLATE = r"""<!DOCTYPE html>
       });
     }
     $('testinput').value = S.sample_testcase || '';
+    $('verdict').textContent=''; $('verdict').className='info';
+    $('runresult').textContent='';
     loadStarter();
   }
+  async function load(){ applyState(await window.pywebview.api.state()); }
   function loadStarter(){
     const l=S.languages.find(x=>x.slug===$('lang').value);
     setMode($('lang').value);
@@ -273,7 +358,9 @@ _TEMPLATE = r"""<!DOCTYPE html>
     btn.disabled=true; v.className='info'; v.innerHTML='<span class="spin">⏳</span> Submitting & judging…';
     const r=await window.pywebview.api.submit($('lang').value, getCode());
     if(!r.ok){ v.className='bad'; v.textContent='⚠ '+r.error; btn.disabled=false; return; }
-    if(r.accepted){ v.className='ok'; v.textContent='✅ Accepted! Releasing…';
+    if(r.accepted){ v.className='ok';
+      if(downshiftMode){ v.textContent='✅ Accepted!'; advanceDownshift(); return; }
+      v.textContent='✅ Accepted! Releasing…';
       setTimeout(()=>window.pywebview.api.release(), 1200); return; }
     v.className='bad'; v.textContent='❌ '+r.status+(r.total_correct!=null?(' ('+r.total_correct+'/'+r.total_testcases+')'):'');
     btn.disabled=false;
@@ -296,8 +383,29 @@ _TEMPLATE = r"""<!DOCTYPE html>
     const r=await window.pywebview.api.hint(getCode());
     b.textContent = r.ok ? ('Hint '+r.level+': '+r.text) : ('⚠ '+r.error);
   }
-  async function escapeHatch(){
-    const typed=prompt('Emergency exit — this WILL be logged.\nType exactly:  I GIVE UP');
+  function openEscape(){ $('overlay').style.display='flex'; }
+  function closeEscape(){ $('overlay').style.display='none'; }
+  function setDsBanner(i,n){ const b=$('dsbanner'); b.style.display='inline-block'; b.textContent='Downshift '+i+'/'+n; }
+  async function startDownshift(){
+    closeEscape();
+    const v=$('verdict'); v.className='info'; v.innerHTML='<span class="spin">⬇️</span> Loading easier problems…';
+    const r=await window.pywebview.api.start_downshift();
+    if(!r.ok){ alert('Could not start downshift: '+r.error+'\n\nYou can still give up.'); v.textContent=''; return; }
+    downshiftMode=true;
+    applyState(r.problem);
+    setDsBanner(r.index, r.total);
+  }
+  async function advanceDownshift(){
+    const r=await window.pywebview.api.advance_downshift();
+    if(r.done){ $('verdict').className='ok'; $('verdict').textContent='✅ Downshift complete! Releasing…';
+      setTimeout(()=>window.pywebview.api.release(), 1200); return; }
+    applyState(r.problem);
+    setDsBanner(r.index, r.total);
+    $('verdict').className='ok'; $('verdict').textContent='✓ Solved — next problem ('+r.index+'/'+r.total+')';
+  }
+  async function giveUp(){
+    closeEscape();
+    const typed=prompt('Give up — this WILL be logged and the app re-triggers in 1 hour.\nType exactly:  I GIVE UP');
     if(typed===null) return;
     const r=await window.pywebview.api.escape(typed);
     if(!r.ok) alert(r.error);
