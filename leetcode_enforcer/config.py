@@ -28,6 +28,10 @@ DEFAULT_CONFIG = {
     "llm_base_url": "http://localhost:11434/v1",
     "llm_model": "qwen3:8b",
     "llm_timeout_seconds": 120,
+    # archive Accepted solutions to a private git repo (issue #25); one per problem,
+    # committed locally + best-effort pushed to the repo's existing remote
+    "solutions_repo_enabled": True,
+    "solutions_repo_path": "~/leetcode-solutions",
 }
 
 
