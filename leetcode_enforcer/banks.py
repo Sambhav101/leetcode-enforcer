@@ -59,18 +59,31 @@ def candidate_slugs(enabled_banks, solved_slugs) -> list[str]:
     return unsolved or pool   # if everything's solved, allow repeats
 
 
-def select_problem(enabled_banks, solved_slugs, *, fetch=fetch_problem,
-                   rng=random, max_tries: int = 8):
-    """Pick a free-tier problem from the enabled banks (skips premium-locked)."""
+def select_problem(enabled_banks, solved_slugs, *, prefer_topics=None,
+                   fetch=fetch_problem, rng=random, max_tries: int = 8):
+    """Pick a free-tier problem from the enabled banks (skips premium-locked).
+
+    When ``prefer_topics`` is given (#12), prefer a free problem sharing one of those
+    topics; if none turns up within ``max_tries``, fall back to the first free problem
+    seen rather than failing — the user should always get a next problem.
+    """
     candidates = candidate_slugs(enabled_banks, solved_slugs)
     if not candidates:
         raise NoProblemAvailable("No problems configured — check enabled banks.")
     order = list(candidates)
     rng.shuffle(order)
+    want = set(prefer_topics or [])
+    fallback = None
     for slug in order[:max_tries]:
         problem = fetch(slug)
-        if not problem.paid:          # free-tier only (#14)
+        if problem.paid:              # free-tier only (#14)
+            continue
+        if not want or (want & set(problem.topics)):
             return problem
+        if fallback is None:
+            fallback = problem        # first free problem, used if no topic match
+    if fallback is not None:
+        return fallback
     raise NoProblemAvailable("Couldn't find a free-tier problem to serve.")
 
 
