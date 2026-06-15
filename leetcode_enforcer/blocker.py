@@ -32,8 +32,11 @@ def _read_vendor(name: str) -> str:
 
 
 _CM_CSS = _read_vendor("cm.css") + "\n" + _read_vendor("material-darker.css")
+# Order matters: simple.js defines CodeMirror.defineSimpleMode, which rust.js needs
+# (without it rust highlighting silently falls back to plaintext — issue #40).
 _CM_JS = "\n".join(_read_vendor(n) for n in (
-    "cm.js", "clike.js", "python.js", "rust.js", "matchbrackets.js", "closebrackets.js"))
+    "cm.js", "clike.js", "python.js", "simple.js", "rust.js",
+    "matchbrackets.js", "closebrackets.js"))
 
 
 def resolve_fallback(fallback, enabled_banks, solved_slugs, *,
